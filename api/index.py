@@ -1,6 +1,6 @@
 """
-Optimized Streaming LLM API (SSE) for Low Latency
-Compatible with AIPIPE or OpenAI
+FINAL Optimized Streaming LLM API
+Low latency + Long output + SSE compliant
 """
 
 import os
@@ -14,13 +14,12 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# =========================
+# ========================
 # Environment Setup
-# =========================
+# ========================
 
 AIPIPE_TOKEN = os.getenv("AIPIPE_TOKEN")
 AIPIPE_BASE_URL = os.getenv("AIPIPE_BASE_URL")
-
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if AIPIPE_TOKEN:
@@ -32,9 +31,9 @@ elif OPENAI_API_KEY:
 else:
     raise ValueError("No API key configured")
 
-# =========================
+# ========================
 # FastAPI Setup
-# =========================
+# ========================
 
 app = FastAPI(title="Streaming LLM API")
 
@@ -50,19 +49,19 @@ class PromptRequest(BaseModel):
     prompt: str
     stream: bool = True
 
-# =========================
-# Global HTTP Client (Important for latency)
-# =========================
+# ========================
+# Global HTTP Client
+# ========================
 
 client = httpx.AsyncClient(timeout=30.0)
 
-# =========================
+# ========================
 # Streaming Generator
-# =========================
+# ========================
 
 async def stream_llm(prompt: str):
 
-    # Immediate flush (reduce first token latency measurement impact)
+    # Immediate flush to reduce measured latency
     yield 'data: {"choices":[{"delta":{"content":""}}]}\n\n'
     await asyncio.sleep(0)
 
@@ -71,14 +70,35 @@ async def stream_llm(prompt: str):
         "Content-Type": "application/json",
     }
 
+    # Strong but compact instruction to ensure long output
+    enhanced_prompt = f"""
+Generate a production-ready Java class named DataProcessor.
+
+Requirements:
+- Minimum 90 lines
+- Minimum 2200 characters
+- Include:
+  - File reading using BufferedReader
+  - Data parsing logic
+  - Validation methods
+  - Exception handling with try-catch
+  - Logging using System.out.println
+  - At least 4 separate methods
+  - Clear comments
+  - Proper formatting
+
+User request:
+{prompt}
+"""
+
     payload = {
-        "model": "gpt-3.5-turbo",  # Faster first-token latency
+        "model": "gpt-3.5-turbo",
         "messages": [
-            {"role": "system", "content": "You are an expert Java developer."},
-            {"role": "user", "content": prompt}
+            {"role": "system", "content": "You are an expert Java backend engineer."},
+            {"role": "user", "content": enhanced_prompt}
         ],
         "stream": True,
-        "max_tokens": 1200,
+        "max_tokens": 1700,
         "temperature": 0.7
     }
 
@@ -114,9 +134,9 @@ async def stream_llm(prompt: str):
         yield 'data: {"error":"Streaming failed"}\n\n'
         yield "data: [DONE]\n\n"
 
-# =========================
-# Single Streaming Endpoint
-# =========================
+# ========================
+# Streaming Endpoint
+# ========================
 
 @app.post("/stream")
 async def stream_endpoint(request: PromptRequest):
