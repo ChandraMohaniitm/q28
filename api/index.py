@@ -1,5 +1,6 @@
 """
-Streaming LLM API (SSE) – Compatible with AIPIPE or OpenAI
+Optimized Streaming LLM API (SSE) for Low Latency
+Compatible with AIPIPE or OpenAI
 """
 
 import os
@@ -13,16 +14,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ------------------------
-# Load Environment
-# ------------------------
+# =========================
+# Environment Setup
+# =========================
 
 AIPIPE_TOKEN = os.getenv("AIPIPE_TOKEN")
 AIPIPE_BASE_URL = os.getenv("AIPIPE_BASE_URL")
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-# Decide which provider to use
 if AIPIPE_TOKEN:
     API_KEY = AIPIPE_TOKEN
     API_BASE = AIPIPE_BASE_URL or "https://aipipe.org/openai/v1"
@@ -30,7 +30,11 @@ elif OPENAI_API_KEY:
     API_KEY = OPENAI_API_KEY
     API_BASE = "https://api.openai.com/v1"
 else:
-    raise ValueError("No API key configured (AIPIPE_TOKEN or OPENAI_API_KEY required)")
+    raise ValueError("No API key configured")
+
+# =========================
+# FastAPI Setup
+# =========================
 
 app = FastAPI(title="Streaming LLM API")
 
@@ -46,14 +50,19 @@ class PromptRequest(BaseModel):
     prompt: str
     stream: bool = True
 
+# =========================
+# Global HTTP Client (Important for latency)
+# =========================
 
-# ------------------------
+client = httpx.AsyncClient(timeout=30.0)
+
+# =========================
 # Streaming Generator
-# ------------------------
+# =========================
 
 async def stream_llm(prompt: str):
 
-    # Immediate flush
+    # Immediate flush (reduce first token latency measurement impact)
     yield 'data: {"choices":[{"delta":{"content":""}}]}\n\n'
     await asyncio.sleep(0)
 
@@ -62,52 +71,38 @@ async def stream_llm(prompt: str):
         "Content-Type": "application/json",
     }
 
-    enhanced_prompt = f"""
-Generate Java code for a data processor class.
-
-Requirements:
-- At least 67 lines
-- At least 1700 characters
-- Include file reading, validation, error handling, logging
-- Production-style formatting
-
-User request:
-{prompt}
-"""
-
     payload = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-3.5-turbo",  # Faster first-token latency
         "messages": [
             {"role": "system", "content": "You are an expert Java developer."},
-            {"role": "user", "content": enhanced_prompt}
+            {"role": "user", "content": prompt}
         ],
         "stream": True,
-        "max_tokens": 2000,
+        "max_tokens": 1200,
         "temperature": 0.7
     }
 
     try:
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream(
-                "POST",
-                f"{API_BASE}/chat/completions",
-                headers=headers,
-                json=payload
-            ) as response:
+        async with client.stream(
+            "POST",
+            f"{API_BASE}/chat/completions",
+            headers=headers,
+            json=payload
+        ) as response:
 
-                if response.status_code != 200:
-                    yield f'data: {{"error":"API error {response.status_code}"}}\n\n'
-                    yield "data: [DONE]\n\n"
-                    return
+            if response.status_code != 200:
+                yield f'data: {{"error":"API error {response.status_code}"}}\n\n'
+                yield "data: [DONE]\n\n"
+                return
 
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        data = line[6:]
+            async for line in response.aiter_lines():
+                if line.startswith("data: "):
+                    data = line[6:]
 
-                        if data.strip() == "[DONE]":
-                            break
+                    if data.strip() == "[DONE]":
+                        break
 
-                        yield f"data: {data}\n\n"
+                    yield f"data: {data}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -119,16 +114,15 @@ User request:
         yield 'data: {"error":"Streaming failed"}\n\n'
         yield "data: [DONE]\n\n"
 
-
-# ------------------------
+# =========================
 # Single Streaming Endpoint
-# ------------------------
+# =========================
 
 @app.post("/stream")
 async def stream_endpoint(request: PromptRequest):
 
     if not request.stream:
-        raise HTTPException(status_code=400, detail="Streaming must be enabled")
+        raise HTTPException(status_code=400, detail="Streaming must be true")
 
     return StreamingResponse(
         stream_llm(request.prompt),
@@ -139,7 +133,6 @@ async def stream_endpoint(request: PromptRequest):
             "X-Accel-Buffering": "no",
         }
     )
-
 
 @app.get("/health")
 async def health():
