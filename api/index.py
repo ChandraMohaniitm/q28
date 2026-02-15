@@ -1,22 +1,11 @@
-"""
-FINAL Optimized Streaming LLM API
-Low latency + Long output + SSE compliant
-"""
-
 import os
-import asyncio
 import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 load_dotenv()
-
-# ========================
-# Environment Setup
-# ========================
 
 AIPIPE_TOKEN = os.getenv("AIPIPE_TOKEN")
 AIPIPE_BASE_URL = os.getenv("AIPIPE_BASE_URL")
@@ -31,75 +20,56 @@ elif OPENAI_API_KEY:
 else:
     raise ValueError("No API key configured")
 
-# ========================
-# FastAPI Setup
-# ========================
-
-app = FastAPI(title="Streaming LLM API")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app = FastAPI()
 
 class PromptRequest(BaseModel):
     prompt: str
     stream: bool = True
 
-# ========================
-# Global HTTP Client
-# ========================
-
-client = httpx.AsyncClient(timeout=30.0)
-
-# ========================
-# Streaming Generator
-# ========================
+# Create client ONCE (important for speed)
+client = httpx.AsyncClient(timeout=25.0)
 
 async def stream_llm(prompt: str):
 
-    # Immediate flush to reduce measured latency
-    yield 'data: {"choices":[{"delta":{"content":""}}]}\n\n'
-    await asyncio.sleep(0)
-
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json",
-    }
-
-    # Strong but compact instruction to ensure long output
-    enhanced_prompt = f"""
-Generate a production-ready Java class named DataProcessor.
-
-Requirements:
-- Minimum 90 lines
-- Minimum 2200 characters
-- Include:
-  - File reading using BufferedReader
-  - Data parsing logic
-  - Validation methods
-  - Exception handling with try-catch
-  - Logging using System.out.println
-  - At least 4 separate methods
-  - Clear comments
-  - Proper formatting
-
-User request:
-{prompt}
-"""
+    # IMMEDIATE FIRST CHUNK (no sleep)
+    yield 'data: {"choices":[{"delta":{"content":"Generating Java code...\\n"}}]}\n\n'
 
     payload = {
         "model": "gpt-3.5-turbo",
         "messages": [
-            {"role": "system", "content": "You are an expert Java backend engineer."},
-            {"role": "user", "content": enhanced_prompt}
+            {
+                "role": "system",
+                "content": "You are a senior Java developer."
+            },
+            {
+                "role": "user",
+                "content": f"""
+Generate a complete Java class named DataProcessor.
+
+Requirements:
+- At least 100 lines
+- At least 2500 characters
+- Include:
+  - BufferedReader file reading
+  - Validation methods
+  - Multiple helper methods
+  - Try-catch error handling
+  - Logging statements
+  - Comments
+  - Clean formatting
+
+{prompt}
+"""
+            }
         ],
         "stream": True,
-        "max_tokens": 1700,
-        "temperature": 0.7
+        "max_tokens": 1800,
+        "temperature": 0.6
+    }
+
+    headers = {
+        "Authorization": f"Bearer {API_KEY}",
+        "Content-Type": "application/json",
     }
 
     try:
@@ -107,7 +77,7 @@ User request:
             "POST",
             f"{API_BASE}/chat/completions",
             headers=headers,
-            json=payload
+            json=payload,
         ) as response:
 
             if response.status_code != 200:
@@ -126,17 +96,9 @@ User request:
 
         yield "data: [DONE]\n\n"
 
-    except httpx.TimeoutException:
-        yield 'data: {"error":"Request timed out"}\n\n'
-        yield "data: [DONE]\n\n"
-
     except Exception:
         yield 'data: {"error":"Streaming failed"}\n\n'
         yield "data: [DONE]\n\n"
-
-# ========================
-# Streaming Endpoint
-# ========================
 
 @app.post("/stream")
 async def stream_endpoint(request: PromptRequest):
@@ -150,10 +112,9 @@ async def stream_endpoint(request: PromptRequest):
         headers={
             "Cache-Control": "no-cache",
             "Connection": "keep-alive",
-            "X-Accel-Buffering": "no",
-        }
+        },
     )
 
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    return {"status": "ok"}
